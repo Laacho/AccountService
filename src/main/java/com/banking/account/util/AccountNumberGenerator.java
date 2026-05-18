@@ -1,7 +1,10 @@
 package com.banking.account.util;
 
+import org.springframework.stereotype.Component;
+
 import java.security.SecureRandom;
 
+@Component
 public class AccountNumberGenerator {
 
     private final static SecureRandom random = new SecureRandom();

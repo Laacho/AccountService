@@ -46,9 +46,10 @@ public record InternalTransferRequest(
 
         /**
          * Idempotency key forwarded from Transaction-Service.
-         * Account-Service does NOT enforce idempotency itself — Transaction-Service
-         * is responsible for that. Provided here for distributed tracing only.
+         * Used by Account-Service for duplicate-transfer detection via the ledger unique constraint.
          */
+        @NotBlank(message = "idempotencyKey is required")
+        @Size(max = 64, message = "idempotencyKey must not exceed 64 characters")
         String idempotencyKey
 
 ) {

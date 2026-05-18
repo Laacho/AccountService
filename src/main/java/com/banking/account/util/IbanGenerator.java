@@ -1,5 +1,8 @@
 package com.banking.account.util;
 
+import org.springframework.stereotype.Component;
+
+@Component
 public class IbanGenerator {
 
 

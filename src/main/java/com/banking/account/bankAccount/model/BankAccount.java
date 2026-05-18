@@ -129,7 +129,6 @@ public class BankAccount {
     private LocalDateTime updatedAt;
 
 
-    //todo move these methods in the service layer, they are not related to the entity itself but to the business logic of the application
 
     // ─── Bidirectional relation helpers ─────────────────────────────────
 

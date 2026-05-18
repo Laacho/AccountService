@@ -1,5 +1,8 @@
 package com.banking.account.service;
 
+import com.banking.account.accountLedger.model.AccountLedgerEntry;
+import com.banking.account.accountLedger.model.LedgerDirection;
+import com.banking.account.accountLedger.service.AccountLedgerEntryService;
 import com.banking.account.accountStatement.model.AccountStatement;
 import com.banking.account.accountStatement.service.AccountStatementService;
 import com.banking.account.balance.model.Balance;
@@ -11,12 +14,15 @@ import com.banking.account.dto.request.*;
 import com.banking.account.dto.response.*;
 import com.banking.account.exception.AccountAccessDeniedException;
 import com.banking.account.exception.AccountNotFoundException;
+import com.banking.account.exception.CurrencyMismatchException;
 import com.banking.account.exception.InvalidAccountStateException;
 import com.banking.account.feing.service.UserClientService;
 import com.banking.account.util.AccountNumberGenerator;
 import com.banking.account.util.AccountSpecification;
 import com.banking.account.util.BankConstants;
 import com.banking.account.util.IbanGenerator;
+import org.joda.money.CurrencyUnit;
+import org.joda.money.Money;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -38,14 +44,16 @@ public class AccountServiceImpl implements AccountService {
     private final BankAccountRepository bankAccountRepository;
     private final UserClientService userClientService;
     private final AccountStatementService accountStatementService;
+    private final AccountLedgerEntryService accountLedgerEntryService;
 
     @Autowired
     public AccountServiceImpl(BankBranchService bankBranchService,
-                              BankAccountRepository bankAccountRepository, UserClientService userClientService, AccountStatementService accountStatementService) {
+                              BankAccountRepository bankAccountRepository, UserClientService userClientService, AccountStatementService accountStatementService, AccountLedgerEntryService accountLedgerEntryService) {
         this.bankBranchService = bankBranchService;
         this.bankAccountRepository = bankAccountRepository;
         this.userClientService = userClientService;
         this.accountStatementService = accountStatementService;
+        this.accountLedgerEntryService = accountLedgerEntryService;
     }
 
     @Override
@@ -271,17 +279,200 @@ public class AccountServiceImpl implements AccountService {
 
     @Override
     public InternalAccountResponse getAccountForInternalUse(UUID accountId) {
-        return null;
+
+        BankAccount bankAccount = bankAccountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountNotFoundException("Account not found: " + accountId));
+        Balance balance = bankAccount.getBalance();
+        return InternalAccountResponse.builder()
+                .id(bankAccount.getId())
+                .userId(bankAccount.getUserId())
+                .iban(bankAccount.getIban())
+                .accountType(bankAccount.getAccountType())
+                .status(bankAccount.getStatus())
+                .currencyCode(balance.getCurrencyCode())
+                .openedAt(bankAccount.getOpenedAt())
+                .build();
     }
 
     @Override
     public BalanceResponse getBalanceForInternalUse(UUID accountId) {
-        return null;
+        BankAccount bankAccount = bankAccountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountNotFoundException("Account not found: " + accountId));
+        Balance balance = bankAccount.getBalance();
+        return BalanceResponse.builder()
+                .accountId(bankAccount.getId())
+                .availableAmount(balance.getAvailableAmount())
+                .blockedAmount(balance.getBlockedAmount())
+                .totalAmount(balance.getAvailableAmount().add(balance.getBlockedAmount()))
+                .currencyCode(balance.getCurrencyCode())
+                .lastUpdated(balance.getLastUpdated())
+                .build();
     }
 
     @Override
+    @Transactional
     public TransferResultResponse executeTransfer(InternalTransferRequest request) {
-        return null;
+        //1. verify both account exists else throw AccountNotFoundException
+        //2. verify both accounts are active InvalidAccountStateException (receiver can have a frozen account and get the money)
+        //3. For now cross currency is not supported so if it's a mismatch we throw exception
+        //4. check if the source account has more or equal money then the request amount
+        //5. how do we check if a transfer exists for idempotency
+        //6. Subtract the amount from the source and update lastUpdatedAt
+        //7. Add the request getAmount to destBalance.setAvailable amount and we update again
+        //8. we save both account in bank account repo
+        //9. create AccountStatement and save to the db
+        //10. Map to response and return
+
+        if (request.sourceAccountId().equals(request.destinationAccountId())) {
+            throw new IllegalArgumentException("Self-transfer not allowed");
+        }
+
+        // Fast-path idempotency check — not race-safe alone, re-checked after lock acquisition
+        if (accountLedgerEntryService.findAlreadyExistingLedger(request.idempotencyKey(), request.sourceAccountId())) {
+            return rebuildCacheResponse(request);
+        }
+
+        // Lock accounts in deterministic UUID order to prevent deadlock on reverse concurrent transfers
+        boolean sourceFirst = request.sourceAccountId().compareTo(request.destinationAccountId()) < 0;
+        UUID firstId  = sourceFirst ? request.sourceAccountId()      : request.destinationAccountId();
+        UUID secondId = sourceFirst ? request.destinationAccountId() : request.sourceAccountId();
+
+        BankAccount first = bankAccountRepository
+                .findByIdForUpdate(firstId)
+                .orElseThrow(() -> new AccountNotFoundException("Account not found: " + firstId));
+        BankAccount second = bankAccountRepository
+                .findByIdForUpdate(secondId)
+                .orElseThrow(() -> new AccountNotFoundException("Account not found: " + secondId));
+
+        BankAccount source      = sourceFirst ? first : second;
+        BankAccount destination = sourceFirst ? second : first;
+
+        // Post-lock re-check: handles concurrent requests that both passed the fast-path check
+        if (accountLedgerEntryService.findAlreadyExistingLedger(request.idempotencyKey(), request.sourceAccountId())) {
+            return rebuildCacheResponse(request, source, destination);
+        }
+
+        if (!source.canDebit()) {
+            throw new InvalidAccountStateException(
+                    "Source account cannot debit. Current status: " + source.getStatus());
+        }
+
+        if (!destination.canCredit()) {
+            throw new InvalidAccountStateException(
+                    "Destination account cannot credit. Current status: " + destination.getStatus());
+        }
+
+        String currencyCode = source.getBalance().getCurrencyCode();
+        if (!currencyCode.equals(destination.getBalance().getCurrencyCode())) {
+            throw new CurrencyMismatchException(
+                    "Cross-currency transfers not supported. Source=%s, Destination=%s"
+                            .formatted(currencyCode, destination.getBalance().getCurrencyCode()));
+        }
+        if (!currencyCode.equals(request.currency())) {
+            throw new CurrencyMismatchException(
+                    "Request currency does not match account currency. Account=%s, Request=%s"
+                            .formatted(currencyCode, request.currency()));
+        }
+
+        Money transferAmount = Money.of(CurrencyUnit.of(request.currency()), request.amount());
+
+        BigDecimal sourceBalanceBefore = source.getBalance().getAvailableAmount();
+        BigDecimal destBalanceBefore   = destination.getBalance().getAvailableAmount();
+
+        LocalDateTime executedAt = LocalDateTime.now();
+
+        source.getBalance().debit(transferAmount);
+        destination.getBalance().credit(transferAmount);
+
+        bankAccountRepository.save(source);
+        bankAccountRepository.save(destination);
+
+        AccountLedgerEntry debitEntry = AccountLedgerEntry.builder()
+                .bankAccount(source)
+                .direction(LedgerDirection.DEBIT)
+                .amount(request.amount())
+                .currencyCode(request.currency())
+                .balanceBefore(sourceBalanceBefore)
+                .balanceAfter(source.getBalance().getAvailableAmount())
+                .counterpartyAccountId(destination.getId())
+                .reference(request.reference())
+                .idempotencyKey(request.idempotencyKey())
+                .description("Transfer to " + destination.getIban())
+                .build();
+
+        AccountLedgerEntry creditEntry = AccountLedgerEntry.builder()
+                .bankAccount(destination)
+                .direction(LedgerDirection.CREDIT)
+                .amount(request.amount())
+                .currencyCode(request.currency())
+                .balanceBefore(destBalanceBefore)
+                .balanceAfter(destination.getBalance().getAvailableAmount())
+                .counterpartyAccountId(source.getId())
+                .reference(request.reference())
+                .idempotencyKey(request.idempotencyKey())
+                .description("Transfer from " + source.getIban())
+                .build();
+
+        accountLedgerEntryService.saveAll(List.of(debitEntry, creditEntry));
+
+        return new TransferResultResponse(
+                request.reference(),
+                toBalanceResponse(source),
+                toBalanceResponse(destination),
+                executedAt
+        );
+    }
+
+    private TransferResultResponse rebuildCacheResponse(InternalTransferRequest request) {
+        BankAccount source = bankAccountRepository.findById(request.sourceAccountId())
+                .orElseThrow(() -> new AccountNotFoundException("Source not found"));
+        BankAccount destination = bankAccountRepository.findById(request.destinationAccountId())
+                .orElseThrow(() -> new AccountNotFoundException("Destination not found"));
+        return rebuildCacheResponse(request, source, destination);
+    }
+
+    private TransferResultResponse rebuildCacheResponse(InternalTransferRequest request, BankAccount source, BankAccount destination) {
+        AccountLedgerEntry originalDebit = accountLedgerEntryService
+                .findByIdempotencyKeyAndBanAccountId(request.idempotencyKey(), request.sourceAccountId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "exists check passed but ledger entry not found — concurrency bug"));
+        AccountLedgerEntry originalCredit = accountLedgerEntryService
+                .findByIdempotencyKeyAndBanAccountId(request.idempotencyKey(), request.destinationAccountId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "debit found but credit entry missing — data integrity issue"));
+
+        return new TransferResultResponse(
+                originalDebit.getReference(),
+                toSnapshotBalanceResponse(source, originalDebit),
+                toSnapshotBalanceResponse(destination, originalCredit),
+                originalDebit.getCreatedAt()
+        );
+    }
+
+    private BalanceResponse toSnapshotBalanceResponse(BankAccount account, AccountLedgerEntry entry) {
+        BigDecimal available = entry.getBalanceAfter();
+        BigDecimal blocked   = account.getBalance().getBlockedAmount();
+        return BalanceResponse.builder()
+                .accountId(account.getId())
+                .availableAmount(available)
+                .blockedAmount(blocked)
+                .totalAmount(available.add(blocked))
+                .currencyCode(entry.getCurrencyCode())
+                .lastUpdated(entry.getCreatedAt())
+                .build();
+    }
+
+    private BalanceResponse toBalanceResponse(BankAccount account) {
+
+        Balance balance = account.getBalance();
+        return BalanceResponse.builder()
+                .accountId(account.getId())
+                .availableAmount(balance.getAvailableAmount())
+                .blockedAmount(balance.getBlockedAmount())
+                .totalAmount(balance.getAvailableAmount().add(balance.getBlockedAmount()))
+                .currencyCode(balance.getCurrencyCode())
+                .lastUpdated(balance.getLastUpdated())
+                .build();
     }
 
     private AccountResponse toAccountResponse(BankAccount account, UUID userId) {
