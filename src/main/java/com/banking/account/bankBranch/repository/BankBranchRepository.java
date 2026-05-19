@@ -12,6 +12,6 @@ import java.util.UUID;
 public interface BankBranchRepository extends JpaRepository<BankBranch, UUID> {
     Optional<BankBranch> findByBranchName(String name);
 
-    @Query(value = "SELECT b.bank_code FROM bank_branch b WHERE b.branch_name = :branchName", nativeQuery = true)
+    @Query(value = "SELECT b.code FROM bank_branch b WHERE b.branch_name = :branchName", nativeQuery = true)
     String findBankCodeByBranchName(String branchName);
 }

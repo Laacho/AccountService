@@ -1,5 +1,6 @@
 package com.banking.account.accountStatement.service;
 
+import com.banking.account.aspect.Logged;
 import com.banking.account.accountStatement.model.AccountStatement;
 import com.banking.account.accountStatement.repository.AccountStatementRepository;
 import com.banking.account.dto.request.GenerateStatementRequest;
@@ -11,6 +12,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
+@Logged
 @Service
 public class AccountStatementService {
 

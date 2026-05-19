@@ -41,7 +41,7 @@ public class JwtFilter extends OncePerRequestFilter {
                 }
                 Set<String> roles = jwtValidator.extractAuthorities(claims);
                 UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
-                        jwtValidator.extractUserId(token).toString(),
+                        jwtValidator.extractUserId(claims).toString(),
                         null,
                         roles.stream().map(SimpleGrantedAuthority::new).toList()
                 );

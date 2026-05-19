@@ -1,14 +1,16 @@
 package com.banking.account.feing.service;
 
+import com.banking.account.aspect.Logged;
+import com.banking.account.exception.AccountNotFoundException;
 import com.banking.account.feing.client.UserServiceClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.UUID;
 
+@Logged
 @Service
 public class UserClientService {
 
@@ -19,14 +21,14 @@ public class UserClientService {
         this.userServiceClient = userServiceClient;
     }
 
-
     public void validateUserExists(UUID userId) {
-        ResponseEntity<Void> voidResponseEntity = userServiceClient.userExists(userId);
-        if(voidResponseEntity.getStatusCode().isSameCodeAs(HttpStatus.NOT_FOUND)) {
-            //todo handle exceptions
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        try {
+            userServiceClient.userExists(userId);
+        } catch (feign.FeignException.NotFound e) {
+            throw new AccountNotFoundException("User not found: " + userId);
+        } catch (feign.FeignException e) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "User-Service unavailable");
         }
-
     }
 
 }

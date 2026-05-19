@@ -15,11 +15,9 @@ import org.springframework.web.context.request.ServletRequestAttributes;
  * transaction as the audited entity change, so both the revision row and the
  * {@code *_aud} shadow rows are committed atomically.</p>
  *
- * <p><strong>How userId is obtained:</strong> The API Gateway extracts the
- * userId from the validated JWT and injects it as the Spring Security
- * {@code Authentication#getPrincipal()}. This service's security config
- * (JwtAuthenticationFilter) parses the {@code X-User-Id} header set by the
- * gateway and populates the SecurityContext accordingly.</p>
+ * <p><strong>How userId is obtained:</strong> {@code JwtFilter} validates the
+ * Bearer token and sets the userId as the Spring Security
+ * {@code Authentication#getPrincipal()} in the {@code SecurityContextHolder}.</p>
  *
  * <p><strong>Background jobs:</strong> When the @Scheduled transaction processor
  * runs, there is no HTTP request and no SecurityContext. In that case

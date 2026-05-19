@@ -1,5 +1,6 @@
 package com.banking.account.accountLedger.service;
 
+import com.banking.account.aspect.Logged;
 import com.banking.account.accountLedger.model.AccountLedgerEntry;
 import com.banking.account.accountLedger.repository.AccountLedgerEntryRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,6 +11,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+@Logged
 @Service
 public class AccountLedgerEntryService {
 

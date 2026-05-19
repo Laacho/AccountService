@@ -24,7 +24,6 @@ public class JwtValidator {
     @Value("${security.jwt.issuer}")
     private String issuer;
 
-
     public Claims validate(String token) {
         try {
             return Jwts.parser()
@@ -45,18 +44,10 @@ public class JwtValidator {
         return type != null && type.equals("access");
     }
 
-    public Claims parseAllClaims(String token) {
-        return Jwts.parser()
-                .verifyWith(signingKey())
-                .requireIssuer(issuer)
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
+    public UUID extractUserId(Claims claims) {
+        return UUID.fromString(claims.get("userId").toString());
     }
 
-    public UUID extractUserId(String token) {
-        return UUID.fromString(parseAllClaims(token).get("userId").toString());
-    }
     public String extractUsername(Claims claims) {
         return claims.getSubject();
     }

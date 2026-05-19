@@ -7,6 +7,7 @@ import com.banking.account.accountStatement.model.AccountStatement;
 import com.banking.account.accountStatement.service.AccountStatementService;
 import com.banking.account.balance.model.Balance;
 import com.banking.account.bankAccount.model.AccountStatus;
+import com.banking.account.bankAccount.model.AccountType;
 import com.banking.account.bankAccount.model.BankAccount;
 import com.banking.account.bankAccount.repository.BankAccountRepository;
 import com.banking.account.bankBranch.service.BankBranchService;
@@ -17,6 +18,7 @@ import com.banking.account.exception.AccountNotFoundException;
 import com.banking.account.exception.CurrencyMismatchException;
 import com.banking.account.exception.InvalidAccountStateException;
 import com.banking.account.feing.service.UserClientService;
+import com.banking.account.aspect.Logged;
 import com.banking.account.util.AccountNumberGenerator;
 import com.banking.account.util.AccountSpecification;
 import com.banking.account.util.BankConstants;
@@ -37,6 +39,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
+@Logged
 @Service
 public class AccountServiceImpl implements AccountService {
 
@@ -45,26 +48,38 @@ public class AccountServiceImpl implements AccountService {
     private final UserClientService userClientService;
     private final AccountStatementService accountStatementService;
     private final AccountLedgerEntryService accountLedgerEntryService;
+    private final AccountNumberGenerator accountNumberGenerator;
+    private final IbanGenerator ibanGenerator;
 
     @Autowired
     public AccountServiceImpl(BankBranchService bankBranchService,
-                              BankAccountRepository bankAccountRepository, UserClientService userClientService, AccountStatementService accountStatementService, AccountLedgerEntryService accountLedgerEntryService) {
+                              BankAccountRepository bankAccountRepository,
+                              UserClientService userClientService,
+                              AccountStatementService accountStatementService,
+                              AccountLedgerEntryService accountLedgerEntryService,
+                              AccountNumberGenerator accountNumberGenerator,
+                              IbanGenerator ibanGenerator) {
         this.bankBranchService = bankBranchService;
         this.bankAccountRepository = bankAccountRepository;
         this.userClientService = userClientService;
         this.accountStatementService = accountStatementService;
         this.accountLedgerEntryService = accountLedgerEntryService;
+        this.accountNumberGenerator = accountNumberGenerator;
+        this.ibanGenerator = ibanGenerator;
     }
 
     @Override
     @Transactional
     public AccountResponse createAccount(UUID userId, CreateAccountRequest request) {
+        if (request.accountType() == AccountType.UNKNOWN) {
+            throw new IllegalArgumentException("Account type UNKNOWN is not valid");
+        }
+
         userClientService.validateUserExists(userId);
-        AccountNumberGenerator accountGen = new AccountNumberGenerator();
-        String accountNumber = accountGen.generate(request.accountType().getCode());
+        String accountNumber = accountNumberGenerator.generate(request.accountType().getCode());
 
         String branchCode = bankBranchService.findCodeByName(request.branchName());
-        String iban = IbanGenerator.generateIban(
+        String iban = ibanGenerator.generateIban(
                 BankConstants.COUNTRY_CODE,
                 BankConstants.BANK_CODE,
                 branchCode,
@@ -312,17 +327,6 @@ public class AccountServiceImpl implements AccountService {
     @Override
     @Transactional
     public TransferResultResponse executeTransfer(InternalTransferRequest request) {
-        //1. verify both account exists else throw AccountNotFoundException
-        //2. verify both accounts are active InvalidAccountStateException (receiver can have a frozen account and get the money)
-        //3. For now cross currency is not supported so if it's a mismatch we throw exception
-        //4. check if the source account has more or equal money then the request amount
-        //5. how do we check if a transfer exists for idempotency
-        //6. Subtract the amount from the source and update lastUpdatedAt
-        //7. Add the request getAmount to destBalance.setAvailable amount and we update again
-        //8. we save both account in bank account repo
-        //9. create AccountStatement and save to the db
-        //10. Map to response and return
-
         if (request.sourceAccountId().equals(request.destinationAccountId())) {
             throw new IllegalArgumentException("Self-transfer not allowed");
         }
@@ -463,7 +467,6 @@ public class AccountServiceImpl implements AccountService {
     }
 
     private BalanceResponse toBalanceResponse(BankAccount account) {
-
         Balance balance = account.getBalance();
         return BalanceResponse.builder()
                 .accountId(account.getId())

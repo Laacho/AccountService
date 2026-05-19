@@ -34,11 +34,9 @@ import java.util.UUID;
 /**
  * Public REST controller for the Account-Service.
  *
- * <p>All routes under {@code /api/v1/accounts} are exposed via the API Gateway
- * and require a valid JWT. The Gateway validates the token and injects the
- * {@code X-User-Id} header before forwarding the request; this controller
- * reads that header to identify the authenticated user without touching the
- * JWT directly.</p>
+ * <p>All routes under {@code /api/v1/accounts} require a valid JWT.
+ * The authenticated user identity is resolved from the Spring Security
+ * {@code Authentication} principal populated by {@code JwtFilter}.</p>
  *
  * <p>This controller is intentionally thin — all business logic lives in
  * {@link AccountService}.</p>
