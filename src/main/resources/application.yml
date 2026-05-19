@@ -18,10 +18,6 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
         format_sql: true
-        # ── Hibernate Envers ───────────────────────────────────────────────
-        # Envers stores a revision for every @Audited entity change.
-        # audit_table_suffix: the shadow tables will be named <entity>_aud
-        # store_data_at_delete: also snapshot the row contents when DELETEd
         envers:
           audit_table_suffix: _aud
           revision_field_name: rev
@@ -29,6 +25,16 @@ spring:
           store_data_at_delete: true
           default_schema:
 
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      connect-timeout: 2s
+      lettuce:
+        shutdown-timeout: 100ms
 
 eureka:
   client:
@@ -53,19 +59,16 @@ management:
   health:
     db:
       enabled: true
+    redis:
+      enabled: false
   metrics:
     tags:
       service: ${spring.application.name}
+
 security:
   jwt:
     secret: ${JWT_SECRET}
     issuer: ${JWT_ISSUER}
-  kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
-  data:
-    redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
 
 services:
   user:
